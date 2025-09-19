@@ -1,0 +1,36 @@
+# Visual Studio Gitingore
+
+## Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+Win32/
+build/
+[Bb]in/
+[Oo]bj/
+
+## Visual Studio User specific files
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+## Visual Studio generated files
+*.vs/
+*.VC.db
+*.VC.VC.opendb
+ipch/
+*.aps
+*.ilk
+*.pdb
+*.obj
+*.pch
+
+# Executables and Libraries
+*.exe
+*.dll
+*.lib
+*.exp
+
+# User-defined files
+*.log
