@@ -1,5 +1,7 @@
 #include "pch.h"
 #include "TextService.h"
+#include "LanguageBar.h"
+
 
 // --- Constructor / Destructor ---
 CTextService::CTextService()
@@ -7,15 +9,16 @@ CTextService::CTextService()
     _refCount = 1;
     _pThreadMgr = nullptr;
     _tfClientId = TF_CLIENTID_NULL;
-    _pComposition = nullptr; // _pComposition 초기화 추가
+    _pComposition = nullptr;
+    _pLangBar = nullptr;
+    _isHangulMode = FALSE;
 }
 
 CTextService::~CTextService()
 {
+    // _pLangBar는 Deactivate에서 RemoveItem 되면서 해제되므로
+    // 여기서 별도로 해제할 필요가 없습니다.
 }
-
-// ... CreateInstance, IUnknown, Activate/Deactivate, _Init/_UninitKeyEventSink ...
-// (이전 단계에서 제공한 코드와 동일)
 
 // --- Static Factory Method ---
 HRESULT CTextService::CreateInstance(IUnknown* pUnkOuter, REFIID riid, void** ppvObj)
@@ -73,9 +76,13 @@ STDMETHODIMP CTextService::Activate(ITfThreadMgr* pThreadMgr, TfClientId tfClien
 {
     return this->ActivateEx(pThreadMgr, tfClientId, 0);
 }
+
 STDMETHODIMP CTextService::Deactivate()
 {
+    // 반드시 초기화의 역순으로 해제합니다.
+    _UninitLanguageBar();
     _UninitKeyEventSink();
+
     if (_pThreadMgr)
     {
         _pThreadMgr->Release();
@@ -84,12 +91,14 @@ STDMETHODIMP CTextService::Deactivate()
     _tfClientId = TF_CLIENTID_NULL;
     return S_OK;
 }
+
 STDMETHODIMP CTextService::ActivateEx(ITfThreadMgr* pThreadMgr, TfClientId tfClientId, DWORD dwFlags)
 {
     _pThreadMgr = pThreadMgr;
     _pThreadMgr->AddRef();
     _tfClientId = tfClientId;
-    if (!_InitKeyEventSink())
+    _isHangulMode = TRUE;
+    if (!_InitKeyEventSink() || !_InitLanguageBar())
     {
         Deactivate();
         return E_FAIL;
@@ -126,5 +135,43 @@ void CTextService::_UninitKeyEventSink()
     {
         pKeystrokeMgr->UnadviseKeyEventSink(_tfClientId);
         pKeystrokeMgr->Release();
+    }
+}
+
+// --- 언어 입력기 초기화/해제 함수 구현 ---
+BOOL CTextService::_InitLanguageBar()
+{
+    if (_pLangBar) return TRUE;
+
+    ITfLangBarItemMgr* pLangBarItemMgr;
+    if (_pThreadMgr->QueryInterface(IID_ITfLangBarItemMgr, (void**)&pLangBarItemMgr) != S_OK)
+        return FALSE;
+
+    _pLangBar = new CLanguageBar();
+    if (_pLangBar == nullptr)
+    {
+        pLangBarItemMgr->Release();
+        return FALSE;
+    }
+
+    pLangBarItemMgr->AddItem(_pLangBar);
+    pLangBarItemMgr->Release();
+    // _pLangBar의 소유권은 이제 LangBarMgr에 있으므로 여기서 Release하지 않습니다.
+
+    return TRUE;
+}
+
+void CTextService::_UninitLanguageBar()
+{
+    if (_pLangBar)
+    {
+        ITfLangBarItemMgr* pLangBarItemMgr;
+        if (_pThreadMgr && _pThreadMgr->QueryInterface(IID_ITfLangBarItemMgr, (void**)&pLangBarItemMgr) == S_OK)
+        {
+            pLangBarItemMgr->RemoveItem(_pLangBar);
+            pLangBarItemMgr->Release();
+        }
+        _pLangBar->Release();
+        _pLangBar = nullptr;
     }
 }

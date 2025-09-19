@@ -8,6 +8,10 @@ class CKrime;
 extern HINSTANCE g_hInstDll;
 extern LONG g_dllRefCount;
 
+// --- 전방 선언 ---
+class CKrime;
+class CLanguageBar; // CLanguageBar 클래스 전방 선언 추가
+
 // --- KRIME을 위한 새 GUID 선언 ---
 // {8120C22B-556A-4A73-A33A-783E8D62412B}
 DEFINE_GUID(CLSID_KRIME,
@@ -20,3 +24,7 @@ DEFINE_GUID(GUID_PROFILE_KRIME,
 // {A15E8E5A-B90A-471D-9A61-29214154F34A}
 DEFINE_GUID(GUID_PRESERVEDKEY_KRIME_TOGGLE,
     0xa15e8e5a, 0xb90a, 0x471d, 0x9a, 0x61, 0x29, 0x21, 0x41, 0x54, 0xf3, 0x4a);
+
+// {B4A72E41-C62A-463E-8445-931165F10580}
+DEFINE_GUID(GUID_LBI_KRIME_INPUTMODE,
+    0xb4a72e41, 0xc62a, 0x463e, 0x84, 0x45, 0x93, 0x11, 0x65, 0xf1, 0x5, 0x80);

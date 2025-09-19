@@ -3,6 +3,8 @@
 // Used by Resource.rc
 //
 #define IDI_ICON_MAIN                   101
+#define IDI_ICON_HANGUL_ON              102
+#define IDI_ICON_HANGUL_OFF             103
 
 // Next default values for new objects
 // 

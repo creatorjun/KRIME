@@ -1,19 +1,27 @@
 #pragma once
 #include "pch.h"
-#include "KRIME.h" // CKrime 클래스의 전체 정의를 위해 포함
+#include "KRIME.h"
+
+// CTextService가 CLanguageBar의 포인터만 알면 되므로,
+// 전체 헤더를 포함하는 대신 전방 선언합니다.
+class CLanguageBar;
 
 class CTextService : public ITfTextInputProcessorEx,
     public ITfKeyEventSink,
     public ITfCompositionSink
 {
 public:
-    // IUnknown, ITfTextInputProcessorEx, ITfKeyEventSink (이전과 동일)
+    // IUnknown
     STDMETHODIMP QueryInterface(REFIID riid, void** ppvObj);
     STDMETHODIMP_(ULONG) AddRef(void);
     STDMETHODIMP_(ULONG) Release(void);
+
+    // ITfTextInputProcessor / ITfTextInputProcessorEx
     STDMETHODIMP Activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId);
     STDMETHODIMP Deactivate();
     STDMETHODIMP ActivateEx(ITfThreadMgr* pThreadMgr, TfClientId tfClientId, DWORD dwFlags);
+
+    // ITfKeyEventSink
     STDMETHODIMP OnSetFocus(BOOL fForeground);
     STDMETHODIMP OnTestKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM lParam, BOOL* pfEaten);
     STDMETHODIMP OnKeyDown(ITfContext* pContext, WPARAM wParam, LPARAM lParam, BOOL* pfEaten);
@@ -34,10 +42,11 @@ private:
     CTextService();
     ~CTextService();
 
+    // Private Helper Functions
     BOOL _InitKeyEventSink();
     void _UninitKeyEventSink();
-
-    // 내부 텍스트 처리 헬퍼 함수
+    BOOL _InitLanguageBar();
+    void _UninitLanguageBar();
     void _InsertText(ITfContext* pContext, const WCHAR* wcs);
     void _UpdateCompositionDisplay(ITfContext* pContext, const WCHAR* wcs);
     BOOL _IsComposing();
@@ -48,4 +57,6 @@ private:
 
     CKrime _krime;
     ITfComposition* _pComposition;
+    CLanguageBar* _pLangBar;
+    BOOL _isHangulMode;
 };
