@@ -1,6 +1,9 @@
 #pragma once
 #include "pch.h"
 
+class CKrime;
+
+
 // --- 전역 변수 선언 ---
 extern HINSTANCE g_hInstDll;
 extern LONG g_dllRefCount;

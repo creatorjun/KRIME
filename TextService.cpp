@@ -7,40 +7,36 @@ CTextService::CTextService()
     _refCount = 1;
     _pThreadMgr = nullptr;
     _tfClientId = TF_CLIENTID_NULL;
+    _pComposition = nullptr; // _pComposition 초기화 추가
 }
 
 CTextService::~CTextService()
 {
 }
 
+// ... CreateInstance, IUnknown, Activate/Deactivate, _Init/_UninitKeyEventSink ...
+// (이전 단계에서 제공한 코드와 동일)
+
 // --- Static Factory Method ---
 HRESULT CTextService::CreateInstance(IUnknown* pUnkOuter, REFIID riid, void** ppvObj)
 {
-    if (ppvObj == nullptr)
-        return E_INVALIDARG;
+    if (ppvObj == nullptr) return E_INVALIDARG;
     *ppvObj = nullptr;
-
-    if (pUnkOuter != nullptr)
-        return CLASS_E_NOAGGREGATION;
-
+    if (pUnkOuter != nullptr) return CLASS_E_NOAGGREGATION;
     CTextService* pTextService = new CTextService();
-    if (pTextService == nullptr)
-        return E_OUTOFMEMORY;
-
+    if (pTextService == nullptr) return E_OUTOFMEMORY;
     HRESULT hr = pTextService->QueryInterface(riid, ppvObj);
-    pTextService->Release(); // QueryInterface will increase ref count
+    pTextService->Release();
     return hr;
 }
 
 // --- IUnknown Implementation ---
 STDMETHODIMP CTextService::QueryInterface(REFIID riid, void** ppvObj)
 {
-    if (ppvObj == nullptr)
-        return E_INVALIDARG;
+    if (ppvObj == nullptr) return E_INVALIDARG;
     *ppvObj = nullptr;
 
-    if (IsEqualIID(riid, IID_IUnknown) ||
-        IsEqualIID(riid, IID_ITfTextInputProcessor))
+    if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, IID_ITfTextInputProcessor))
     {
         *ppvObj = (ITfTextInputProcessor*)this;
     }
@@ -48,40 +44,38 @@ STDMETHODIMP CTextService::QueryInterface(REFIID riid, void** ppvObj)
     {
         *ppvObj = (ITfTextInputProcessorEx*)this;
     }
+    else if (IsEqualIID(riid, IID_ITfKeyEventSink))
+    {
+        *ppvObj = (ITfKeyEventSink*)this;
+    }
+    else if (IsEqualIID(riid, IID_ITfCompositionSink)) // ITfCompositionSink 추가
+    {
+        *ppvObj = (ITfCompositionSink*)this;
+    }
 
     if (*ppvObj)
     {
         AddRef();
         return S_OK;
     }
-
     return E_NOINTERFACE;
 }
-
-STDMETHODIMP_(ULONG) CTextService::AddRef(void)
-{
-    return ++_refCount;
-}
-
+STDMETHODIMP_(ULONG) CTextService::AddRef(void) { return ++_refCount; }
 STDMETHODIMP_(ULONG) CTextService::Release(void)
 {
     LONG cr = --_refCount;
-    if (_refCount == 0)
-    {
-        delete this;
-    }
+    if (_refCount == 0) delete this;
     return cr;
 }
 
 // --- ITfTextInputProcessor / ITfTextInputProcessorEx Implementation ---
 STDMETHODIMP CTextService::Activate(ITfThreadMgr* pThreadMgr, TfClientId tfClientId)
 {
-    // ITfTextInputProcessorEx의 ActivateEx를 호출합니다.
     return this->ActivateEx(pThreadMgr, tfClientId, 0);
 }
-
 STDMETHODIMP CTextService::Deactivate()
 {
+    _UninitKeyEventSink();
     if (_pThreadMgr)
     {
         _pThreadMgr->Release();
@@ -90,15 +84,47 @@ STDMETHODIMP CTextService::Deactivate()
     _tfClientId = TF_CLIENTID_NULL;
     return S_OK;
 }
-
 STDMETHODIMP CTextService::ActivateEx(ITfThreadMgr* pThreadMgr, TfClientId tfClientId, DWORD dwFlags)
 {
     _pThreadMgr = pThreadMgr;
     _pThreadMgr->AddRef();
     _tfClientId = tfClientId;
-
-    // TODO: 여기에 IME 활성화 시 필요한 초기화 코드를 추가합니다.
-    // (예: 키보드 이벤트 싱크 등록, 언어바 아이콘 초기화 등)
-
+    if (!_InitKeyEventSink())
+    {
+        Deactivate();
+        return E_FAIL;
+    }
     return S_OK;
+}
+
+// --- ITfCompositionSink Implementation ---
+STDMETHODIMP CTextService::OnCompositionTerminated(TfEditCookie ecWrite, ITfComposition* pComposition)
+{
+    if (_pComposition)
+    {
+        _pComposition->Release();
+        _pComposition = nullptr;
+    }
+    _krime.Reset(); // 조합 엔진 상태 초기화
+    return S_OK;
+}
+
+
+// --- 내부 함수 구현 ---
+BOOL CTextService::_InitKeyEventSink()
+{
+    ITfKeystrokeMgr* pKeystrokeMgr;
+    if (_pThreadMgr->QueryInterface(IID_ITfKeystrokeMgr, (void**)&pKeystrokeMgr) != S_OK) return FALSE;
+    HRESULT hr = pKeystrokeMgr->AdviseKeyEventSink(_tfClientId, (ITfKeyEventSink*)this, TRUE);
+    pKeystrokeMgr->Release();
+    return (hr == S_OK);
+}
+void CTextService::_UninitKeyEventSink()
+{
+    ITfKeystrokeMgr* pKeystrokeMgr;
+    if (_pThreadMgr && _pThreadMgr->QueryInterface(IID_ITfKeystrokeMgr, (void**)&pKeystrokeMgr) == S_OK)
+    {
+        pKeystrokeMgr->UnadviseKeyEventSink(_tfClientId);
+        pKeystrokeMgr->Release();
+    }
 }
