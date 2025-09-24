@@ -67,6 +67,7 @@
     <None Include="Source.def">
       <Filter>소스 파일</Filter>
     </None>
+    <None Include=".gitignore" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Resource.rc">

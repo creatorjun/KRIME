@@ -162,6 +162,7 @@
     <ClCompile Include="TextInputProcessor.h" />
   </ItemGroup>
   <ItemGroup>
+    <None Include=".gitignore" />
     <None Include="Source.def" />
   </ItemGroup>
   <ItemGroup>

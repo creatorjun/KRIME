@@ -72,7 +72,6 @@ STDMETHODIMP_(ULONG) CLangBarItem::Release()
     return cr;
 }
 
-// ITfLangBarItem
 STDMETHODIMP CLangBarItem::GetInfo(TF_LANGBARITEMINFO* pInfo)
 {
     if (pInfo == nullptr) return E_INVALIDARG;
@@ -80,10 +79,9 @@ STDMETHODIMP CLangBarItem::GetInfo(TF_LANGBARITEMINFO* pInfo)
     pInfo->clsidService = c_clsidKRIME;
     pInfo->guidItem = c_guidProfile;
 
-    // ▼▼▼ 수정된 부분: 아이콘 우선 표시를 위한 스타일 설정 ▼▼▼
-    pInfo->dwStyle = TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_SHOWNINTRAY | TF_LBI_STYLE_HIDDENBYDEFAULT;
-    // TF_LBI_STYLE_HIDDENBYDEFAULT 제거하고 아래처럼 시도해볼 수도 있습니다:
-    // pInfo->dwStyle = TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_SHOWNINTRAY;
+    // ▼▼▼ 수정된 부분: HIDDENBYDEFAULT 제거 ▼▼▼
+    pInfo->dwStyle = TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_SHOWNINTRAY;
+    // TF_LBI_STYLE_HIDDENBYDEFAULT 제거함
     // ▲▲▲ 여기까지 수정 ▲▲▲
 
     pInfo->ulSort = 0;
@@ -96,9 +94,14 @@ STDMETHODIMP CLangBarItem::GetInfo(TF_LANGBARITEMINFO* pInfo)
 STDMETHODIMP CLangBarItem::GetStatus(DWORD* pdwStatus)
 {
     if (pdwStatus == nullptr) return E_INVALIDARG;
-    *pdwStatus = 0; // 또는 TF_LBI_STATUS_HIDDEN 등의 플래그 사용 가능
+
+    // 아이템을 명시적으로 표시하도록 설정
+    *pdwStatus = 0; // TF_LBI_STATUS_HIDDEN 제거
+
+    LOG_WRITE("GetStatus called - Status: 0x%08X", *pdwStatus);
     return S_OK;
 }
+
 
 STDMETHODIMP CLangBarItem::Show(BOOL fShow)
 {
