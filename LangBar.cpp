@@ -1,5 +1,6 @@
+// LangBar.cpp - 수정된 버전
 #include <ole2.h>
-#include <olectl.h>  // Connection Point 오류 상수들을 위해 추가
+#include <olectl.h>
 #include <strsafe.h>
 #include "LangBar.h"
 #include "TextInputProcessor.h"
@@ -14,10 +15,20 @@ CLangBarItem::CLangBarItem(CTextInputProcessor* pTIP)
     _dwSinkCookie = TF_INVALID_COOKIE;
     _isKoreanMode = TRUE; // 기본값: 한글 모드
 
-    // 리소스로부터 아이콘 로드
-    _hIconMain = (HICON)LoadImage(g_hModule, MAKEINTRESOURCE(IDI_MAIN), IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR);
-    _hIconKor = (HICON)LoadImage(g_hModule, MAKEINTRESOURCE(IDI_KOR), IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR);
-    _hIconEng = (HICON)LoadImage(g_hModule, MAKEINTRESOURCE(IDI_ENG), IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR);
+    // 시스템 아이콘 크기 얻기
+    int iconWidth = GetSystemMetrics(SM_CXSMICON);
+    int iconHeight = GetSystemMetrics(SM_CYSMICON);
+
+    // 리소스로부터 아이콘 로드 (크기 지정)
+    _hIconMain = (HICON)LoadImage(g_hModule, MAKEINTRESOURCE(IDI_MAIN), IMAGE_ICON, iconWidth, iconHeight, LR_DEFAULTCOLOR);
+    _hIconKor = (HICON)LoadImage(g_hModule, MAKEINTRESOURCE(IDI_KOR), IMAGE_ICON, iconWidth, iconHeight, LR_DEFAULTCOLOR);
+    _hIconEng = (HICON)LoadImage(g_hModule, MAKEINTRESOURCE(IDI_ENG), IMAGE_ICON, iconWidth, iconHeight, LR_DEFAULTCOLOR);
+
+    // 아이콘 로딩 실패 시 로그 출력
+    LOG_WRITE("Icon loading - Main: %s, Kor: %s, Eng: %s",
+        _hIconMain ? "OK" : "FAILED",
+        _hIconKor ? "OK" : "FAILED",
+        _hIconEng ? "OK" : "FAILED");
 
     g_cRefDll++;
 }
@@ -67,18 +78,25 @@ STDMETHODIMP CLangBarItem::GetInfo(TF_LANGBARITEMINFO* pInfo)
     if (pInfo == nullptr) return E_INVALIDARG;
 
     pInfo->clsidService = c_clsidKRIME;
-    pInfo->guidItem = c_guidProfile; // 프로필 GUID를 아이템 ID로 사용
-    pInfo->dwStyle = TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_SHOWNINTRAY;
+    pInfo->guidItem = c_guidProfile;
+
+    // ▼▼▼ 수정된 부분: 아이콘 우선 표시를 위한 스타일 설정 ▼▼▼
+    pInfo->dwStyle = TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_SHOWNINTRAY | TF_LBI_STYLE_HIDDENBYDEFAULT;
+    // TF_LBI_STYLE_HIDDENBYDEFAULT 제거하고 아래처럼 시도해볼 수도 있습니다:
+    // pInfo->dwStyle = TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_SHOWNINTRAY;
+    // ▲▲▲ 여기까지 수정 ▲▲▲
+
     pInfo->ulSort = 0;
     StringCchCopy(pInfo->szDescription, ARRAYSIZE(pInfo->szDescription), L"KRIME 한/영 전환");
 
+    LOG_WRITE("GetInfo called - Style: 0x%08X", pInfo->dwStyle);
     return S_OK;
 }
 
 STDMETHODIMP CLangBarItem::GetStatus(DWORD* pdwStatus)
 {
     if (pdwStatus == nullptr) return E_INVALIDARG;
-    *pdwStatus = 0;
+    *pdwStatus = 0; // 또는 TF_LBI_STATUS_HIDDEN 등의 플래그 사용 가능
     return S_OK;
 }
 
@@ -90,14 +108,14 @@ STDMETHODIMP CLangBarItem::Show(BOOL fShow)
 STDMETHODIMP CLangBarItem::GetTooltipString(BSTR* pbstrToolTip)
 {
     if (pbstrToolTip == nullptr) return E_INVALIDARG;
-    *pbstrToolTip = SysAllocString(_isKoreanMode ? L"현재 한글 입력 상태입니다." : L"현재 영문 입력 상태입니다.");
+    *pbstrToolTip = SysAllocString(_isKoreanMode ? L"한글 입력 모드" : L"영문 입력 모드");
     return (*pbstrToolTip == nullptr) ? E_OUTOFMEMORY : S_OK;
 }
 
 // ITfLangBarItemButton
 STDMETHODIMP CLangBarItem::OnClick(TfLBIClick click, POINT pt, const RECT* prcArea)
 {
-    // 아이콘을 클릭해도 언어가 토글되도록 함
+    LOG_WRITE("LangBar button clicked");
     _pTIP->ToggleLanguage();
     return S_OK;
 }
@@ -105,33 +123,84 @@ STDMETHODIMP CLangBarItem::OnClick(TfLBIClick click, POINT pt, const RECT* prcAr
 STDMETHODIMP CLangBarItem::InitMenu(ITfMenu* pMenu) { return E_NOTIMPL; }
 STDMETHODIMP CLangBarItem::OnMenuSelect(UINT wID) { return E_NOTIMPL; }
 
+// ▼▼▼ GetIcon 메서드 완전히 수정 ▼▼▼
 STDMETHODIMP CLangBarItem::GetIcon(HICON* phIcon)
 {
     if (phIcon == nullptr) return E_INVALIDARG;
-    *phIcon = _isKoreanMode ? _hIconKor : _hIconEng;
-    // 초기에는 _hIconMain을 보여주고 싶다면 별도 로직 추가 가능
+
+    HICON hSrcIcon = nullptr;
+
+    // 현재 모드에 따라 소스 아이콘 선택
+    if (_isKoreanMode)
+    {
+        hSrcIcon = _hIconKor;
+        LOG_WRITE("GetIcon - Korean mode selected");
+    }
+    else
+    {
+        hSrcIcon = _hIconEng;
+        LOG_WRITE("GetIcon - English mode selected");
+    }
+
+    // 아이콘이 없는 경우 메인 아이콘 사용
+    if (hSrcIcon == nullptr)
+    {
+        hSrcIcon = _hIconMain;
+        LOG_WRITE("GetIcon - Using main icon as fallback");
+    }
+
+    // 여전히 아이콘이 없는 경우
+    if (hSrcIcon == nullptr)
+    {
+        LOG_WRITE("GetIcon - No icon available, returning NULL");
+        *phIcon = nullptr;
+        return S_OK; // NULL 아이콘도 유효한 반환값입니다
+    }
+
+    // ▼▼▼ 중요: 아이콘 복사본 생성 (시스템이 해제하므로) ▼▼▼
+    *phIcon = CopyIcon(hSrcIcon);
+
+    if (*phIcon == nullptr)
+    {
+        LOG_WRITE("GetIcon - Failed to copy icon");
+        return E_FAIL;
+    }
+
+    LOG_WRITE("GetIcon - Successfully returned icon copy");
     return S_OK;
 }
+// ▲▲▲ GetIcon 메서드 수정 완료 ▲▲▲
 
+// ▼▼▼ GetText 메서드 수정 ▼▼▼
 STDMETHODIMP CLangBarItem::GetText(BSTR* pbstrText)
 {
     if (pbstrText == nullptr) return E_INVALIDARG;
-    *pbstrText = SysAllocString(L""); // 아이콘만 표시하고 텍스트는 표시 안함
-    return S_OK;
-}
 
-// --- ITfSource ---
-// 이 함수를 아래 코드로 완전히 교체해주세요.
+    // 아이콘이 있는 경우 텍스트는 비워두고, 없는 경우에만 텍스트 표시
+    if ((_isKoreanMode && _hIconKor) || (!_isKoreanMode && _hIconEng) || _hIconMain)
+    {
+        *pbstrText = SysAllocString(L""); // 아이콘이 있으면 텍스트 비움
+        LOG_WRITE("GetText - Returning empty text (icon available)");
+    }
+    else
+    {
+        // 아이콘이 없는 경우에만 텍스트 표시
+        *pbstrText = SysAllocString(_isKoreanMode ? L"한" : L"A");
+        LOG_WRITE("GetText - Returning fallback text: %s", _isKoreanMode ? "한" : "A");
+    }
+
+    return (*pbstrText == nullptr) ? E_OUTOFMEMORY : S_OK;
+}
+// ▲▲▲ GetText 메서드 수정 완료 ▲▲▲
+
+// ITfSource (변경 없음)
 STDMETHODIMP CLangBarItem::AdviseSink(REFIID riid, IUnknown* punk, DWORD* pdwCookie)
 {
     if (!IsEqualIID(riid, IID_ITfLangBarItemSink))
-    {
-        return CONNECT_E_CANNOTCONNECT; // if문 뒤에 세미콜론 제거
-    }
+        return CONNECT_E_CANNOTCONNECT;
+
     if (_pLangBarItemSink != nullptr)
-    {
-        return CONNECT_E_ADVISELIMIT; // if문 뒤에 세미콜론 제거
-    }
+        return CONNECT_E_ADVISELIMIT;
 
     if (punk->QueryInterface(IID_ITfLangBarItemSink, (void**)&_pLangBarItemSink) != S_OK)
     {
@@ -139,18 +208,15 @@ STDMETHODIMP CLangBarItem::AdviseSink(REFIID riid, IUnknown* punk, DWORD* pdwCoo
         return E_NOINTERFACE;
     }
 
-    *pdwCookie = 1; // 간단하게 1로 고정
+    *pdwCookie = 1;
     _dwSinkCookie = *pdwCookie;
     return S_OK;
 }
 
-// 이 함수를 아래 코드로 완전히 교체해주세요.
 STDMETHODIMP CLangBarItem::UnadviseSink(DWORD dwCookie)
 {
     if (dwCookie != _dwSinkCookie || _pLangBarItemSink == nullptr)
-    {
-        return CONNECT_E_NOCONNECTION; // if문 뒤에 세미콜론 제거
-    }
+        return CONNECT_E_NOCONNECTION;
 
     _pLangBarItemSink->Release();
     _pLangBarItemSink = nullptr;
@@ -162,9 +228,16 @@ STDMETHODIMP CLangBarItem::UnadviseSink(DWORD dwCookie)
 void CLangBarItem::UpdateIcon(BOOL isKorean)
 {
     _isKoreanMode = isKorean;
+    LOG_WRITE("UpdateIcon called - Mode: %s", isKorean ? "Korean" : "English");
+
     if (_pLangBarItemSink)
     {
-        // TSF 관리자에게 아이콘 및 툴팁을 업데이트하라고 알림
-        _pLangBarItemSink->OnUpdate(TF_LBI_ICON | TF_LBI_TOOLTIP);
+        // TSF 관리자에게 아이콘 및 텍스트를 업데이트하라고 알림
+        _pLangBarItemSink->OnUpdate(TF_LBI_ICON | TF_LBI_TEXT | TF_LBI_TOOLTIP);
+        LOG_WRITE("OnUpdate called with TF_LBI_ICON | TF_LBI_TEXT | TF_LBI_TOOLTIP");
+    }
+    else
+    {
+        LOG_WRITE("UpdateIcon - No sink available");
     }
 }

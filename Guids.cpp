@@ -1,3 +1,4 @@
+// Guids.cpp : Defines the GUIDs for the KRIME text service.
 #include "Globals.h"
 
 // {DA42832A-23A7-4408-B541-C62624D657A1}

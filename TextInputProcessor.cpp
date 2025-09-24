@@ -1,3 +1,5 @@
+// TextInputProcessor.cpp
+
 #include "framework.h"
 #include "TextInputProcessor.h"
 #include "LangBar.h"
@@ -8,14 +10,21 @@ CTextInputProcessor::CTextInputProcessor()
     _pThreadMgr = nullptr;
     _clientId = TF_CLIENTID_NULL;
     _pLangBarItem = nullptr;
-    _dwThreadMgrEventSinkCookie = TF_INVALID_COOKIE;
-    _isKoreanMode = TRUE;
+    _isKoreanMode = TRUE; // 기본 상태는 한글
     g_cRefDll++;
     LOG_WRITE("CTextInputProcessor object created.");
 }
 
 CTextInputProcessor::~CTextInputProcessor()
 {
+    if (_pLangBarItem)
+    {
+        _pLangBarItem->Release();
+    }
+    if (_pThreadMgr)
+    {
+        _pThreadMgr->Release();
+    }
     g_cRefDll--;
     LOG_WRITE("CTextInputProcessor object destroyed.");
 }
@@ -27,8 +36,6 @@ STDMETHODIMP CTextInputProcessor::QueryInterface(REFIID riid, void** ppvObj)
 
     if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, IID_ITfTextInputProcessor))
         *ppvObj = (ITfTextInputProcessor*)this;
-    else if (IsEqualIID(riid, IID_ITfThreadMgrEventSink))
-        *ppvObj = (ITfThreadMgrEventSink*)this;
     else if (IsEqualIID(riid, IID_ITfKeyEventSink))
         *ppvObj = (ITfKeyEventSink*)this;
 
@@ -40,34 +47,61 @@ STDMETHODIMP CTextInputProcessor::QueryInterface(REFIID riid, void** ppvObj)
     return E_NOINTERFACE;
 }
 
-STDMETHODIMP_(ULONG) CTextInputProcessor::AddRef(void) { return ++_cRef; }
+STDMETHODIMP_(ULONG) CTextInputProcessor::AddRef(void)
+{
+    return ++_cRef;
+}
+
 STDMETHODIMP_(ULONG) CTextInputProcessor::Release(void)
 {
     long cr = --_cRef;
-    if (cr == 0) delete this;
+    if (cr == 0)
+    {
+        delete this;
+    }
     return cr;
 }
 
 STDMETHODIMP CTextInputProcessor::Activate(ITfThreadMgr* ptim, TfClientId tid)
 {
-    LOG_WRITE("Activate called. ClientId = %d", tid);
+    LOG_WRITE("Activate started. ClientId = %d", tid);
     _pThreadMgr = ptim;
     _pThreadMgr->AddRef();
     _clientId = tid;
 
-    // 1. 스레드 관리자 이벤트 싱크 등록 (OnSetFocus를 받기 위함)
-    ITfSource* pSource = nullptr;
-    if (SUCCEEDED(_pThreadMgr->QueryInterface(IID_ITfSource, (void**)&pSource)))
+    // 1. 키스트로크 관리자(Keystroke Manager)를 얻어와서 키 이벤트를 받을 준비를 합니다.
+    ITfKeystrokeMgr* pKeystrokeMgr = nullptr;
+    if (SUCCEEDED(_pThreadMgr->QueryInterface(IID_ITfKeystrokeMgr, (void**)&pKeystrokeMgr)))
     {
-        pSource->AdviseSink(IID_ITfThreadMgrEventSink, (ITfThreadMgrEventSink*)this, &_dwThreadMgrEventSinkCookie);
-        pSource->Release();
+        // AdviseKeyEventSink: 이 클래스(this)가 키보드 이벤트를 받겠다고 TSF에 알립니다.
+        pKeystrokeMgr->AdviseKeyEventSink(_clientId, (ITfKeyEventSink*)this, TRUE);
+        LOG_WRITE("Key event sink advised.");
+
+        // PreserveKey: 오른쪽 Alt 키를 시스템에서 사용하지 않고 우리 IME가 직접 처리하겠다고 예약합니다.
+        TF_PRESERVEDKEY preservedKey;
+        preservedKey.uVKey = VK_RMENU;
+        preservedKey.uModifiers = 0;
+        const WCHAR* desc = L"한/영 전환";
+        pKeystrokeMgr->PreserveKey(_clientId, c_guidLangChangeKey, &preservedKey, desc, static_cast<ULONG>(wcslen(desc)));
+        LOG_WRITE("Right Alt key preserved.");
+
+        pKeystrokeMgr->Release();
+    }
+    else
+    {
+        LOG_WRITE("Failed to get ITfKeystrokeMgr.");
     }
 
-    // 2. 언어 표시줄 아이템 등록
+
+    // 2. 언어 표시줄(Language Bar) 관리자를 얻어와서 아이콘을 등록합니다.
     ITfLangBarItemMgr* pLangBarItemMgr = nullptr;
     if (SUCCEEDED(_pThreadMgr->QueryInterface(IID_ITfLangBarItemMgr, (void**)&pLangBarItemMgr)))
     {
-        _pLangBarItem = new CLangBarItem(this);
+        if (_pLangBarItem == nullptr)
+        {
+            _pLangBarItem = new CLangBarItem(this);
+        }
+
         if (_pLangBarItem)
         {
             pLangBarItemMgr->AddItem(_pLangBarItem);
@@ -75,83 +109,62 @@ STDMETHODIMP CTextInputProcessor::Activate(ITfThreadMgr* ptim, TfClientId tid)
         }
         pLangBarItemMgr->Release();
     }
+    else
+    {
+        LOG_WRITE("Failed to get ITfLangBarItemMgr.");
+    }
+
+    LOG_WRITE("Activate finished.");
     return S_OK;
 }
 
 STDMETHODIMP CTextInputProcessor::Deactivate(void)
 {
-    LOG_WRITE("Deactivate called for ClientId = %d", _clientId);
-
-    // 1. 스레드 관리자 이벤트 싱크 해제
-    ITfSource* pSource = nullptr;
-    if (_pThreadMgr && SUCCEEDED(_pThreadMgr->QueryInterface(IID_ITfSource, (void**)&pSource)))
-    {
-        pSource->UnadviseSink(_dwThreadMgrEventSinkCookie);
-        pSource->Release();
-    }
-
-    // 2. 언어 표시줄 아이템 제거
-    ITfLangBarItemMgr* pLangBarItemMgr = nullptr;
-    if (_pThreadMgr && SUCCEEDED(_pThreadMgr->QueryInterface(IID_ITfLangBarItemMgr, (void**)&pLangBarItemMgr)))
-    {
-        if (_pLangBarItem)
-        {
-            pLangBarItemMgr->RemoveItem(_pLangBarItem);
-            _pLangBarItem->Release();
-            _pLangBarItem = nullptr;
-            LOG_WRITE("Language bar item removed.");
-        }
-        pLangBarItemMgr->Release();
-    }
+    LOG_WRITE("Deactivate started for ClientId = %d", _clientId);
 
     if (_pThreadMgr)
     {
+        // 1. 언어 표시줄 아이템을 제거합니다.
+        ITfLangBarItemMgr* pLangBarItemMgr = nullptr;
+        if (SUCCEEDED(_pThreadMgr->QueryInterface(IID_ITfLangBarItemMgr, (void**)&pLangBarItemMgr)))
+        {
+            if (_pLangBarItem)
+            {
+                pLangBarItemMgr->RemoveItem(_pLangBarItem);
+                LOG_WRITE("Language bar item removed.");
+            }
+            pLangBarItemMgr->Release();
+        }
+
+        // 2. 키 이벤트 싱크와 보존키 등록을 해제합니다.
+        ITfKeystrokeMgr* pKeystrokeMgr = nullptr;
+        if (SUCCEEDED(_pThreadMgr->QueryInterface(IID_ITfKeystrokeMgr, (void**)&pKeystrokeMgr)))
+        {
+            TF_PRESERVEDKEY preservedKey;
+            preservedKey.uVKey = VK_RMENU;
+            preservedKey.uModifiers = 0;
+            pKeystrokeMgr->UnpreserveKey(c_guidLangChangeKey, &preservedKey);
+            pKeystrokeMgr->UnadviseKeyEventSink(_clientId);
+            LOG_WRITE("Key event sink unadvised and key unpreserved.");
+            pKeystrokeMgr->Release();
+        }
+
         _pThreadMgr->Release();
         _pThreadMgr = nullptr;
     }
+
     _clientId = TF_CLIENTID_NULL;
-    LOG_WRITE("Deactivate successful.");
+    LOG_WRITE("Deactivate finished.");
     return S_OK;
 }
 
-
-// --- ITfThreadMgrEventSink ---
-STDMETHODIMP CTextInputProcessor::OnInitDocumentMgr(ITfDocumentMgr* pdim) { return S_OK; }
-STDMETHODIMP CTextInputProcessor::OnUninitDocumentMgr(ITfDocumentMgr* pdim) { return S_OK; }
-
-STDMETHODIMP CTextInputProcessor::OnSetFocus(ITfDocumentMgr* pdimFocus, ITfDocumentMgr* pdimPrevFocus)
+// ITfKeyEventSink 메서드 구현
+STDMETHODIMP CTextInputProcessor::OnSetFocus(BOOL fForeground)
 {
-    LOG_WRITE("OnSetFocus (ThreadMgrEventSink) called.");
-    ITfKeystrokeMgr* pKeystrokeMgr = nullptr;
-    if (FAILED(_pThreadMgr->QueryInterface(IID_ITfKeystrokeMgr, (void**)&pKeystrokeMgr)))
-        return S_OK;
-
-    if (pdimFocus) // 포커스를 얻었을 때
-    {
-        LOG_WRITE("Gained focus, advising key event sink and preserving key.");
-        pKeystrokeMgr->AdviseKeyEventSink(_clientId, (ITfKeyEventSink*)this, TRUE);
-
-        TF_PRESERVEDKEY preservedKey;
-        preservedKey.uVKey = VK_RMENU;
-        preservedKey.uModifiers = 0;
-        const WCHAR* desc = L"한/영 전환";
-        pKeystrokeMgr->PreserveKey(_clientId, c_guidLangChangeKey, &preservedKey, desc, static_cast<ULONG>(wcslen(desc)));
-    }
-    else // 포커스를 잃었을 때
-    {
-        LOG_WRITE("Lost focus, unadvising key event sink and unpreserving key.");
-        pKeystrokeMgr->UnpreserveKey(c_guidLangChangeKey, nullptr); // nullptr로 GUID에 해당하는 모든 키 해제
-        pKeystrokeMgr->UnadviseKeyEventSink(_clientId);
-    }
-    pKeystrokeMgr->Release();
+    LOG_WRITE("OnSetFocus (KeyEventSink) called with fForeground = %s", fForeground ? "TRUE" : "FALSE");
     return S_OK;
 }
-STDMETHODIMP CTextInputProcessor::OnPushContext(ITfContext* pic) { return S_OK; }
-STDMETHODIMP CTextInputProcessor::OnPopContext(ITfContext* pic) { return S_OK; }
 
-
-// --- ITfKeyEventSink ---
-STDMETHODIMP CTextInputProcessor::OnSetFocus(BOOL fForeground) { return S_OK; }
 STDMETHODIMP CTextInputProcessor::OnTestKeyDown(ITfContext* pic, WPARAM wParam, LPARAM lParam, BOOL* pfEaten)
 {
     *pfEaten = FALSE;
@@ -185,7 +198,7 @@ STDMETHODIMP CTextInputProcessor::OnPreservedKey(ITfContext* pic, REFGUID rguid,
     return S_OK;
 }
 
-// --- Public Methods ---
+// Public 메서드 구현
 void CTextInputProcessor::ToggleLanguage()
 {
     _isKoreanMode = !_isKoreanMode;

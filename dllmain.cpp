@@ -1,4 +1,5 @@
-﻿#include "framework.h"
+﻿// dllmain.cpp
+#include "framework.h"
 
 // 전역 변수 정의
 HINSTANCE g_hModule = NULL;

@@ -1,3 +1,5 @@
+// Log.cpp
+
 #include "framework.h"
 
 #ifdef _DEBUG

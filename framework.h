@@ -1,4 +1,7 @@
-﻿#pragma once
+﻿//framework.h: 공용 헤더 파일
+#pragma once
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "oleaut32.lib")
 
 // Target Windows version (필수)
 #include <sdkddkver.h>

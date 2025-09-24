@@ -1,4 +1,4 @@
-#pragma once
+//Globals.h
 #pragma once
 
 #include <windows.h>

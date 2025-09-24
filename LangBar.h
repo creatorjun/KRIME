@@ -1,3 +1,4 @@
+//LangBar.h
 #pragma once
 
 #include <ctffunc.h>

@@ -1,109 +1,233 @@
+// Register.cpp - 수정된 버전
 #include "framework.h"
 #include "Register.h"
+#include <msctf.h>
 
 #define TEXT_SERVICE_NAME L"KRIME Text Service"
 #define TEXT_SERVICE_PROFILE_NAME L"KRIME 한글 입력기"
 
-// --- 함수 전방 선언 (Forward Declarations) ---
-static BOOL SetRegistryKey(HKEY hKey, LPCWSTR subKey, LPCWSTR valueName, const WCHAR* data);
-static BOOL DeleteRegistryTree(HKEY hKey, LPCWSTR subKey);
+// --- COM 서버 등록 (기존 방식 유지) ---
+static BOOL RegisterCOMServer()
+{
+    LOG_WRITE("RegisterCOMServer started.");
 
-// --- 서버 등록 ---
+    WCHAR szClsid[MAX_PATH];
+    if (StringFromGUID2(c_clsidKRIME, szClsid, ARRAYSIZE(szClsid)) == 0) return FALSE;
+
+    WCHAR szModulePath[MAX_PATH];
+    if (GetModuleFileNameW(g_hModule, szModulePath, ARRAYSIZE(szModulePath)) == 0) return FALSE;
+
+    WCHAR szKeyPath[MAX_PATH];
+
+    // 1. CLSID 등록
+    StringCchPrintfW(szKeyPath, MAX_PATH, L"CLSID\\%s", szClsid);
+
+    HKEY hKey;
+    if (RegCreateKeyExW(HKEY_CLASSES_ROOT, szKeyPath, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) != ERROR_SUCCESS)
+        return FALSE;
+
+    RegSetValueExW(hKey, NULL, 0, REG_SZ, (BYTE*)TEXT_SERVICE_NAME, (DWORD)((wcslen(TEXT_SERVICE_NAME) + 1) * sizeof(WCHAR)));
+    RegCloseKey(hKey);
+
+    // 2. InprocServer32 등록
+    StringCchPrintfW(szKeyPath, MAX_PATH, L"CLSID\\%s\\InprocServer32", szClsid);
+    if (RegCreateKeyExW(HKEY_CLASSES_ROOT, szKeyPath, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) != ERROR_SUCCESS)
+        return FALSE;
+
+    RegSetValueExW(hKey, NULL, 0, REG_SZ, (BYTE*)szModulePath, (DWORD)((wcslen(szModulePath) + 1) * sizeof(WCHAR)));
+
+    LPCWSTR threadingModel = L"Apartment";
+    RegSetValueExW(hKey, L"ThreadingModel", 0, REG_SZ, (BYTE*)threadingModel, (DWORD)((wcslen(threadingModel) + 1) * sizeof(WCHAR)));
+    RegCloseKey(hKey);
+
+    LOG_WRITE("RegisterCOMServer successful.");
+    return TRUE;
+}
+
+// --- TSF 등록 (올바른 방식) ---
+static BOOL RegisterTSF()
+{
+    LOG_WRITE("RegisterTSF started.");
+
+    HRESULT hr;
+
+    // 1. ITfInputProcessorProfiles 생성
+    ITfInputProcessorProfiles* pInputProcessorProfiles = nullptr;
+    hr = CoCreateInstance(CLSID_TF_InputProcessorProfiles,
+        NULL,
+        CLSCTX_INPROC_SERVER,
+        IID_ITfInputProcessorProfiles,
+        (void**)&pInputProcessorProfiles);
+
+    if (FAILED(hr))
+    {
+        LOG_WRITE("Failed to create ITfInputProcessorProfiles. HRESULT = 0x%08X", hr);
+        return FALSE;
+    }
+
+    // 2. 텍스트 서비스 등록
+    hr = pInputProcessorProfiles->Register(c_clsidKRIME);
+    if (FAILED(hr))
+    {
+        LOG_WRITE("Failed to register text service. HRESULT = 0x%08X", hr);
+        pInputProcessorProfiles->Release();
+        return FALSE;
+    }
+
+    // 3. 언어 프로필 추가 (한국어 - 0x0412)
+    WCHAR szModulePath[MAX_PATH];
+    GetModuleFileNameW(g_hModule, szModulePath, ARRAYSIZE(szModulePath));
+
+    hr = pInputProcessorProfiles->AddLanguageProfile(c_clsidKRIME,
+        0x0412,  // 한국어 LANGID
+        c_guidProfile,
+        TEXT_SERVICE_PROFILE_NAME,
+        static_cast<ULONG>(wcslen(TEXT_SERVICE_PROFILE_NAME)),
+        szModulePath,
+        static_cast<ULONG>(wcslen(szModulePath)),
+        IDI_MAIN);
+
+    if (FAILED(hr))
+    {
+        LOG_WRITE("Failed to add language profile. HRESULT = 0x%08X", hr);
+        pInputProcessorProfiles->Release();
+        return FALSE;
+    }
+
+    pInputProcessorProfiles->Release();
+
+    // 4. ITfCategoryMgr로 카테고리 등록
+    ITfCategoryMgr* pCategoryMgr = nullptr;
+    hr = CoCreateInstance(CLSID_TF_CategoryMgr,
+        NULL,
+        CLSCTX_INPROC_SERVER,
+        IID_ITfCategoryMgr,
+        (void**)&pCategoryMgr);
+
+    if (FAILED(hr))
+    {
+        LOG_WRITE("Failed to create ITfCategoryMgr. HRESULT = 0x%08X", hr);
+        return FALSE;
+    }
+
+    // 키보드 TIP 카테고리 등록
+    hr = pCategoryMgr->RegisterCategory(c_clsidKRIME, GUID_TFCAT_TIP_KEYBOARD, c_clsidKRIME);
+    if (FAILED(hr))
+    {
+        LOG_WRITE("Failed to register keyboard category. HRESULT = 0x%08X", hr);
+    }
+
+    // UI 요소 지원 카테고리 등록
+    hr = pCategoryMgr->RegisterCategory(c_clsidKRIME, GUID_TFCAT_TIPCAP_UIELEMENTENABLED, c_clsidKRIME);
+    if (FAILED(hr))
+    {
+        LOG_WRITE("Failed to register UI element category. HRESULT = 0x%08X", hr);
+    }
+
+    // Windows 앱 호환성 카테고리 등록 (Windows 8 이상)
+    hr = pCategoryMgr->RegisterCategory(c_clsidKRIME, GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT, c_clsidKRIME);
+    if (FAILED(hr))
+    {
+        LOG_WRITE("Failed to register immersive support category. HRESULT = 0x%08X", hr);
+    }
+
+    pCategoryMgr->Release();
+
+    LOG_WRITE("RegisterTSF successful.");
+    return TRUE;
+}
+
+// --- 메인 등록 함수 ---
 HRESULT RegisterServer()
 {
     LOG_WRITE("RegisterServer started.");
 
-    WCHAR szClsid[MAX_PATH];
-    if (StringFromGUID2(c_clsidKRIME, szClsid, ARRAYSIZE(szClsid)) == 0) return E_FAIL;
+    // COM 초기화
+    HRESULT hr = CoInitialize(NULL);
+    if (FAILED(hr))
+    {
+        LOG_WRITE("Failed to initialize COM. HRESULT = 0x%08X", hr);
+        return hr;
+    }
 
-    WCHAR szProfileGuid[MAX_PATH];
-    if (StringFromGUID2(c_guidProfile, szProfileGuid, ARRAYSIZE(szProfileGuid)) == 0) return E_FAIL;
+    BOOL success = TRUE;
 
-    WCHAR szModulePath[MAX_PATH];
-    if (GetModuleFileNameW(g_hModule, szModulePath, ARRAYSIZE(szModulePath)) == 0) return E_FAIL;
+    // 1. COM 서버 등록
+    if (!RegisterCOMServer())
+    {
+        LOG_WRITE("RegisterCOMServer failed.");
+        success = FALSE;
+    }
 
-    WCHAR szKeyPath[MAX_PATH];
-    WCHAR szCategoryGuid[MAX_PATH];
-    WCHAR szIconIndex[32];
+    // 2. TSF 등록
+    if (success && !RegisterTSF())
+    {
+        LOG_WRITE("RegisterTSF failed.");
+        success = FALSE;
+    }
 
-    // 1. CLSID 등록
-    StringCchPrintfW(szKeyPath, MAX_PATH, L"CLSID\\%s", szClsid);
-    if (!SetRegistryKey(HKEY_CLASSES_ROOT, szKeyPath, NULL, TEXT_SERVICE_NAME)) return E_FAIL;
-    LOG_WRITE("Registered CLSID.");
+    CoUninitialize();
 
-    // 2. InprocServer32 등록
-    StringCchPrintfW(szKeyPath, MAX_PATH, L"CLSID\\%s\\InprocServer32", szClsid);
-    if (!SetRegistryKey(HKEY_CLASSES_ROOT, szKeyPath, NULL, szModulePath)) return E_FAIL;
-    if (!SetRegistryKey(HKEY_CLASSES_ROOT, szKeyPath, L"ThreadingModel", L"Apartment")) return E_FAIL;
-    LOG_WRITE("Registered InprocServer32.");
-
-    // 3. TSF 프로필 등록
-    StringCchPrintfW(szKeyPath, MAX_PATH, L"SOFTWARE\\Microsoft\\CTF\\TIP\\%s\\LanguageProfile\\0x0412\\%s", szClsid, szProfileGuid);
-    if (!SetRegistryKey(HKEY_LOCAL_MACHINE, szKeyPath, NULL, TEXT_SERVICE_PROFILE_NAME)) return E_FAIL;
-    if (!SetRegistryKey(HKEY_LOCAL_MACHINE, szKeyPath, L"IconFile", szModulePath)) return E_FAIL;
-    StringCchPrintfW(szIconIndex, ARRAYSIZE(szIconIndex), L"%d", IDI_MAIN);
-    if (!SetRegistryKey(HKEY_LOCAL_MACHINE, szKeyPath, L"IconIndex", szIconIndex)) return E_FAIL;
-    LOG_WRITE("Registered TSF Language Profile with icon.");
-
-    // 4. 카테고리 등록 (수정된 부분)
-    // GUID를 값 이름이 아닌, 키 경로의 일부로 만들어 등록합니다.
-    if (StringFromGUID2(GUID_TFCAT_TIP_KEYBOARD, szCategoryGuid, ARRAYSIZE(szCategoryGuid)) == 0) return E_FAIL;
-    StringCchPrintfW(szKeyPath, MAX_PATH, L"SOFTWARE\\Microsoft\\CTF\\TIP\\%s\\Category\\%s", szClsid, szCategoryGuid);
-    if (!SetRegistryKey(HKEY_LOCAL_MACHINE, szKeyPath, NULL, NULL)) return E_FAIL;
-
-    if (StringFromGUID2(GUID_TFCAT_TIPCAP_UIELEMENTENABLED, szCategoryGuid, ARRAYSIZE(szCategoryGuid)) == 0) return E_FAIL;
-    StringCchPrintfW(szKeyPath, MAX_PATH, L"SOFTWARE\\Microsoft\\CTF\\TIP\\%s\\Category\\%s", szClsid, szCategoryGuid);
-    if (!SetRegistryKey(HKEY_LOCAL_MACHINE, szKeyPath, NULL, NULL)) return E_FAIL;
-
-    LOG_WRITE("Registered TSF categories correctly.");
-
-    LOG_WRITE("RegisterServer successful.");
-    return S_OK;
+    LOG_WRITE("RegisterServer %s.", success ? "successful" : "failed");
+    return success ? S_OK : E_FAIL;
 }
 
-// --- 서버 등록 취소 ---
+// --- 등록 해제 ---
 HRESULT UnregisterServer()
 {
     LOG_WRITE("UnregisterServer started.");
 
+    HRESULT hr = CoInitialize(NULL);
+    if (FAILED(hr)) return hr;
+
+    BOOL success = TRUE;
+
+    // 1. TSF 등록 해제
+    ITfInputProcessorProfiles* pInputProcessorProfiles = nullptr;
+    hr = CoCreateInstance(CLSID_TF_InputProcessorProfiles,
+        NULL,
+        CLSCTX_INPROC_SERVER,
+        IID_ITfInputProcessorProfiles,
+        (void**)&pInputProcessorProfiles);
+
+    if (SUCCEEDED(hr))
+    {
+        // 언어 프로필 제거
+        pInputProcessorProfiles->RemoveLanguageProfile(c_clsidKRIME, 0x0412, c_guidProfile);
+
+        // 텍스트 서비스 등록 해제
+        pInputProcessorProfiles->Unregister(c_clsidKRIME);
+
+        pInputProcessorProfiles->Release();
+    }
+
+    // 2. 카테고리 등록 해제
+    ITfCategoryMgr* pCategoryMgr = nullptr;
+    hr = CoCreateInstance(CLSID_TF_CategoryMgr,
+        NULL,
+        CLSCTX_INPROC_SERVER,
+        IID_ITfCategoryMgr,
+        (void**)&pCategoryMgr);
+
+    if (SUCCEEDED(hr))
+    {
+        pCategoryMgr->UnregisterCategory(c_clsidKRIME, GUID_TFCAT_TIP_KEYBOARD, c_clsidKRIME);
+        pCategoryMgr->UnregisterCategory(c_clsidKRIME, GUID_TFCAT_TIPCAP_UIELEMENTENABLED, c_clsidKRIME);
+        pCategoryMgr->UnregisterCategory(c_clsidKRIME, GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT, c_clsidKRIME);
+        pCategoryMgr->Release();
+    }
+
+    // 3. COM 서버 등록 해제
     WCHAR szClsid[MAX_PATH];
-    if (StringFromGUID2(c_clsidKRIME, szClsid, ARRAYSIZE(szClsid)) == 0) return E_FAIL;
+    if (StringFromGUID2(c_clsidKRIME, szClsid, ARRAYSIZE(szClsid)) > 0)
+    {
+        WCHAR szKeyPath[MAX_PATH];
+        StringCchPrintfW(szKeyPath, MAX_PATH, L"CLSID\\%s", szClsid);
+        SHDeleteKeyW(HKEY_CLASSES_ROOT, szKeyPath);
+    }
 
-    WCHAR szKeyPath[MAX_PATH];
-
-    StringCchPrintfW(szKeyPath, MAX_PATH, L"SOFTWARE\\Microsoft\\CTF\\TIP\\%s", szClsid);
-    DeleteRegistryTree(HKEY_LOCAL_MACHINE, szKeyPath);
-    LOG_WRITE("Deleted TSF profile keys.");
-
-    StringCchPrintfW(szKeyPath, MAX_PATH, L"CLSID\\%s", szClsid);
-    DeleteRegistryTree(HKEY_CLASSES_ROOT, szKeyPath);
-    LOG_WRITE("Deleted CLSID keys.");
+    CoUninitialize();
 
     LOG_WRITE("UnregisterServer successful.");
     return S_OK;
-}
-
-
-// --- 도우미 함수 정의 ---
-static BOOL SetRegistryKey(HKEY hKey, LPCWSTR subKey, LPCWSTR valueName, const WCHAR* data)
-{
-    HKEY hSubKey;
-    if (RegCreateKeyExW(hKey, subKey, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hSubKey, NULL) != ERROR_SUCCESS) return FALSE;
-
-    if (data)
-    {
-        DWORD cbData = static_cast<DWORD>((wcslen(data) + 1) * sizeof(WCHAR));
-        if (RegSetValueExW(hSubKey, valueName, 0, REG_SZ, (const BYTE*)data, cbData) != ERROR_SUCCESS)
-        {
-            RegCloseKey(hSubKey);
-            return FALSE;
-        }
-    }
-    RegCloseKey(hSubKey);
-    return TRUE;
-}
-
-static BOOL DeleteRegistryTree(HKEY hKey, LPCWSTR subKey)
-{
-    return SHDeleteKeyW(hKey, subKey) == ERROR_SUCCESS;
 }
